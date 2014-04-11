@@ -1172,7 +1172,7 @@ unsigned int static KimotoGravityWell(const CBlockIndex* pindexLast, const CBloc
 	return bnNew.GetCompact();
 }
 
-unsigned int static GetNextWorkRequired(const CBlockIndex* pindexLast, const CBlockHeader *pblock)
+unsigned int static GetNextWorkRequired_V1(const CBlockIndex* pindexLast, const CBlockHeader *pblock)
 {
 	if (pindexLast->nHeight == 156)
 		return bnInitialDifficulty.GetCompact();
@@ -1185,6 +1185,96 @@ unsigned int static GetNextWorkRequired(const CBlockIndex* pindexLast, const CBl
 	uint64				PastBlocksMax				= PastSecondsMax / BlocksTargetSpacing;	
 	
 	return KimotoGravityWell(pindexLast, pblock, BlocksTargetSpacing, PastBlocksMin, PastBlocksMax);
+}
+
+
+
+unsigned int static DarkGravityWave(const CBlockIndex* pindexLast, const CBlockHeader *pblock) {
+    
+    // DarkGravity, written by Evan Duffield - evan@darkcoin.io
+    // Current difficulty formula, RotoCoin
+
+    const CBlockIndex *BlockLastSolved = pindexLast;
+    const CBlockIndex *BlockReading = pindexLast;
+    const CBlockHeader *BlockCreating = pblock;
+    BlockCreating = BlockCreating;
+    int64 nBlockTimeAverage = 0;
+    int64 nBlockTimeAveragePrev = 0;
+    int64 nBlockTimeCount = 0;
+    int64 nBlockTimeSum2 = 0;
+    int64 nBlockTimeCount2 = 0;
+    int64 LastBlockTime = 0;
+    int64 PastBlocksMin = 14; // Tuned for rotocoin
+    int64 PastBlocksMax = 140; // Tuned for rotocoin
+    int64 CountBlocks = 0;
+    CBigNum PastDifficultyAverage;
+    CBigNum PastDifficultyAveragePrev;
+
+    if (BlockLastSolved == NULL || BlockLastSolved->nHeight == 0 || BlockLastSolved->nHeight < PastBlocksMin) { return bnProofOfWorkLimit.GetCompact(); }
+        
+    for (unsigned int i = 1; BlockReading && BlockReading->nHeight > 0; i++) {
+        if (PastBlocksMax > 0 && i > PastBlocksMax) { break; }
+        CountBlocks++;
+
+        if(CountBlocks <= PastBlocksMin) {
+            if (CountBlocks == 1) { PastDifficultyAverage.SetCompact(BlockReading->nBits); }
+            else { PastDifficultyAverage = ((CBigNum().SetCompact(BlockReading->nBits) - PastDifficultyAveragePrev) / CountBlocks) + PastDifficultyAveragePrev; }
+            PastDifficultyAveragePrev = PastDifficultyAverage;
+        }
+
+        if(LastBlockTime > 0){
+            int64 Diff = (LastBlockTime - BlockReading->GetBlockTime());
+            if(Diff < 0) Diff = 0;
+            if(nBlockTimeCount <= PastBlocksMin) {
+                nBlockTimeCount++;
+
+                if (nBlockTimeCount == 1) { nBlockTimeAverage = Diff; }
+                else { nBlockTimeAverage = ((Diff - nBlockTimeAveragePrev) / nBlockTimeCount) + nBlockTimeAveragePrev; }
+                nBlockTimeAveragePrev = nBlockTimeAverage;
+            }
+            nBlockTimeCount2++;
+            nBlockTimeSum2 += Diff;
+        }
+        LastBlockTime = BlockReading->GetBlockTime();
+
+        if (BlockReading->pprev == NULL) { assert(BlockReading); break; }
+        BlockReading = BlockReading->pprev;
+    }
+    
+    CBigNum bnNew(PastDifficultyAverage);
+    if (nBlockTimeCount != 0 && nBlockTimeCount2 != 0) {
+            double SmartAverage = (((nBlockTimeAverage)*0.7)+((nBlockTimeSum2 / nBlockTimeCount2)*0.3));
+            if(SmartAverage < 1) SmartAverage = 1;
+            double Shift = nTargetSpacing/SmartAverage;
+
+            int64 nActualTimespan = (CountBlocks*nTargetSpacing)/Shift;
+            int64 nTargetTimespan = (CountBlocks*nTargetSpacing);
+            if (nActualTimespan < nTargetTimespan/3)
+                nActualTimespan = nTargetTimespan/3;
+            if (nActualTimespan > nTargetTimespan*3)
+                nActualTimespan = nTargetTimespan*3;
+
+            // Retarget
+            bnNew *= nActualTimespan;
+            bnNew /= nTargetTimespan;
+    }
+
+    if (bnNew > bnProofOfWorkLimit){
+        bnNew = bnProofOfWorkLimit;
+    }
+     
+    return bnNew.GetCompact();
+}
+
+unsigned int static GetNextWorkRequired(const CBlockIndex* pindexLast, const CBlockHeader *pblock)
+{
+        int DiffMode = 1; // KGW
+        if (pindexLast->nHeight+1 >= 13) { DiffMode = 2; } // DGW takes control after 13 blocks
+
+        if (DiffMode == 1) { return GetNextWorkRequired_V1(pindexLast, pblock); }
+        else if (DiffMode == 2) { return DarkGravityWave(pindexLast, pblock); }
+        
+        return DarkGravityWave(pindexLast, pblock);
 }
 
 
